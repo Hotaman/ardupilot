@@ -9912,7 +9912,7 @@ switch value'''
             self.drain_mav()
 
             self.progress("Checking results")
-            accuracy_pct = 0.2
+            accuracy_pct = 0.5
             for (ins_prefix, sim_prefix, pre_value, post_value) in param_map:
                 for axis in axes:
                     pname = ins_prefix+"_"+axis
@@ -11443,7 +11443,7 @@ switch value'''
             mavproxy.expect(["Loaded module ftp", "module ftp already loaded"])
             mavproxy.send("ftp list\n")
             some_directory = None
-            for entry in sorted(os.listdir()):
+            for entry in sorted(os.listdir(".")):
                 if os.path.isdir(entry):
                     some_directory = entry
                     break
