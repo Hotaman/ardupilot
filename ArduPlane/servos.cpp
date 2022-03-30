@@ -133,11 +133,17 @@ bool Plane::suppress_throttle(void)
         // if we have an airspeed sensor, then check it too, and
         // require 5m/s. This prevents throttle up due to spiky GPS
         // groundspeed with bad GPS reception
+#if AP_AIRSPEED_ENABLED
         if ((!ahrs.airspeed_sensor_enabled()) || airspeed.get_airspeed() >= 5) {
             // we're moving at more than 5 m/s
             throttle_suppressed = false;
             return false;        
         }
+#else
+        // no airspeed sensor, so we trust that the GPS's movement is truthful
+        throttle_suppressed = false;
+        return false;
+#endif
     }
 
 #if HAL_QUADPLANE_ENABLED
@@ -561,7 +567,7 @@ void Plane::set_servos_controlled(void)
                control_mode == &mode_fbwa ||
                control_mode == &mode_autotune) {
         // a manual throttle mode
-        if (failsafe.throttle_counter) {
+        if (!rc().has_valid_input()) {
             SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, 0.0);
         } else if (g.throttle_passthru_stabilize) {
             // manual pass through of throttle while in FBWA or
@@ -615,7 +621,7 @@ void Plane::set_servos_flaps(void)
     int8_t manual_flap_percent = 0;
 
     // work out any manual flap input
-    if (channel_flap != nullptr && !failsafe.rc_failsafe && failsafe.throttle_counter == 0) {
+    if (channel_flap != nullptr && rc().has_valid_input()) {
         manual_flap_percent = channel_flap->percent_input();
     }
 
@@ -710,7 +716,7 @@ void Plane::set_landing_gear(void)
 void Plane::servos_twin_engine_mix(void)
 {
     float throttle = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
-    float rud_gain = float(plane.g2.rudd_dt_gain) / 100;
+    float rud_gain = float(plane.g2.rudd_dt_gain) * 0.01f;
     rudder_dt = rud_gain * SRV_Channels::get_output_scaled(SRV_Channel::k_rudder) / SERVO_MAX;
 
 #if ADVANCED_FAILSAFE == ENABLED

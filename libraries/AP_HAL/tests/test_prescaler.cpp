@@ -16,19 +16,19 @@ protected:
 };
 
 TEST_P(PrescalerParameterizedTestFixture, DShot150) {
-    test_prescaler(GetParam(), 150000 * 20, true);
+    test_prescaler(GetParam(), 150000 * 8, true);
 }
 
 TEST_P(PrescalerParameterizedTestFixture, DShot300) {
-    test_prescaler(GetParam(), 300000 * 20, true);
+    test_prescaler(GetParam(), 300000 * 8, true);
 }
 
 TEST_P(PrescalerParameterizedTestFixture, DShot600) {
-    test_prescaler(GetParam(), 600000 * 20, true);
+    test_prescaler(GetParam(), 600000 * 8, true);
 }
 
 TEST_P(PrescalerParameterizedTestFixture, DShot1200) {
-    test_prescaler(GetParam(), 1200000 * 20, true);
+    test_prescaler(GetParam(), 1200000 * 8, true);
 }
 
 TEST_P(PrescalerParameterizedTestFixture, Passthrough) {
@@ -36,11 +36,11 @@ TEST_P(PrescalerParameterizedTestFixture, Passthrough) {
 }
 
 TEST_P(PrescalerParameterizedTestFixture, NeoPixel) {
-    test_prescaler(GetParam(), 800000 * 20, false);
+    test_prescaler(GetParam(), 800000 * 11, false);
 }
 
 TEST_P(PrescalerParameterizedTestFixture, ProfiLED) {
-    test_prescaler(GetParam(), 1500000 * 20, false);
+    test_prescaler(GetParam(), 1500000 * 11, false);
 }
 
 INSTANTIATE_TEST_CASE_P(

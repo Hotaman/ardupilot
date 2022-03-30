@@ -53,7 +53,7 @@ public:
     float       norm_input_ignore_trim() const;
 
     // returns true if input is within deadzone of min
-    bool        within_min_dz() const;
+    bool        in_min_dz() const;
 
     uint8_t     percent_input() const;
 
@@ -274,7 +274,7 @@ public:
     const char *string_for_aux_function(AUX_FUNC function) const;
 #endif
     // pwm value under which we consider that Radio value is invalid
-    static const uint16_t RC_MIN_LIMIT_PWM = 900;
+    static const uint16_t RC_MIN_LIMIT_PWM = 800;
     // pwm value above which we consider that Radio value is invalid
     static const uint16_t RC_MAX_LIMIT_PWM = 2200;
 

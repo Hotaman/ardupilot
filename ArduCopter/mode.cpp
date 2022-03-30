@@ -397,38 +397,74 @@ void Copter::notify_flight_mode() {
 
 // get_pilot_desired_angle - transform pilot's roll or pitch input into a desired lean angle
 // returns desired angle in centi-degrees
-void Mode::get_pilot_desired_lean_angles(float &roll_out, float &pitch_out, float angle_max, float angle_limit) const
+void Mode::get_pilot_desired_lean_angles(float &roll_out_cd, float &pitch_out_cd, float angle_max_cd, float angle_limit_cd) const
 {
     // throttle failsafe check
     if (copter.failsafe.radio || !copter.ap.rc_receiver_present) {
-        roll_out = 0;
-        pitch_out = 0;
+        roll_out_cd = 0.0;
+        pitch_out_cd = 0.0;
         return;
     }
-    // fetch roll and pitch inputs
-    roll_out = channel_roll->get_control_in();
-    pitch_out = channel_pitch->get_control_in();
+    // fetch roll and pitch stick positions
+    float thrust_angle_x_cd = - channel_pitch->get_control_in();
+    float thrust_angle_y_cd = channel_roll->get_control_in();
 
     // limit max lean angle
-    angle_limit = constrain_float(angle_limit, 1000.0f, angle_max);
+    angle_limit_cd = constrain_float(angle_limit_cd, 1000.0f, angle_max_cd);
 
-    // scale roll and pitch inputs to ANGLE_MAX parameter range
-    float scaler = angle_max/(float)ROLL_PITCH_YAW_INPUT_MAX;
+    // scale roll and pitch inputs to +- angle_max
+    float scaler = angle_max_cd/(float)ROLL_PITCH_YAW_INPUT_MAX;
+    thrust_angle_x_cd *= scaler;
+    thrust_angle_y_cd *= scaler;
+
+    // convert square mapping to circular mapping with maximum magnitude of angle_limit
+    float total_in = norm(thrust_angle_x_cd, thrust_angle_y_cd);
+    if (total_in > angle_limit_cd) {
+        float ratio = angle_limit_cd / total_in;
+        thrust_angle_x_cd *= ratio;
+        thrust_angle_y_cd *= ratio;
+    }
+
+    // thrust_angle_x and thrust_angle_y represents a level body frame thrust vector in the
+    // direction of [thrust_angle_x, thrust_angle_y] and a magnitude
+    // tan(mag([thrust_angle_x, thrust_angle_y])) * 9.81 * aircraft mass.
+
+    // Conversion from angular thrust vector to euler angles.
+    roll_out_cd = (18000/M_PI) * atanf(cosf(thrust_angle_x_cd*(M_PI/18000))*tanf(thrust_angle_y_cd*(M_PI/18000)));
+    pitch_out_cd = - thrust_angle_x_cd;
+}
+
+// transform pilot's roll or pitch input into a desired velocity
+Vector2f Mode::get_pilot_desired_velocity(float vel_max) const
+{
+    Vector2f vel;
+
+    // throttle failsafe check
+    if (copter.failsafe.radio || !copter.ap.rc_receiver_present) {
+        return vel;
+    }
+    // fetch roll and pitch inputs
+    float roll_out = channel_roll->get_control_in();
+    float pitch_out = channel_pitch->get_control_in();
+
+    // convert roll and pitch inputs to -1 to +1 range
+    float scaler = 1.0 / (float)ROLL_PITCH_YAW_INPUT_MAX;
     roll_out *= scaler;
     pitch_out *= scaler;
 
-    // do circular limit
-    float total_in = norm(pitch_out, roll_out);
-    if (total_in > angle_limit) {
-        float ratio = angle_limit / total_in;
-        roll_out *= ratio;
-        pitch_out *= ratio;
+    // convert roll and pitch inputs into velocity in NE frame
+    vel = Vector2f(-pitch_out, roll_out);
+    if (vel.is_zero()) {
+        return vel;
     }
+    copter.rotate_body_frame_to_NE(vel.x, vel.y);
 
-    // do lateral tilt to euler roll conversion
-    roll_out = (18000/M_PI) * atanf(cosf(pitch_out*(M_PI/18000))*tanf(roll_out*(M_PI/18000)));
-
-    // roll_out and pitch_out are returned
+    // Transform square input range to circular output
+    // vel_scaler is the vector to the edge of the +- 1.0 square in the direction of the current input
+    Vector2f vel_scaler = vel / MAX(fabsf(vel.x), fabsf(vel.y));
+    // We scale the output by the ratio of the distance to the square to the unit circle and multiply by vel_max
+    vel *= vel_max / vel_scaler.length();
+    return vel;
 }
 
 bool Mode::_TakeOff::triggered(const float target_climb_rate) const
@@ -598,13 +634,12 @@ void Mode::land_run_vertical_control(bool pause_descent)
 
 void Mode::land_run_horizontal_control()
 {
-    float target_roll = 0.0f;
-    float target_pitch = 0.0f;
+    Vector2f vel_correction;
     float target_yaw_rate = 0;
 
     // relax loiter target if we might be landed
     if (copter.ap.land_complete_maybe) {
-        loiter_nav->soften_for_landing();
+        pos_control->soften_for_landing_xy();
     }
 
     // process pilot inputs
@@ -621,11 +656,14 @@ void Mode::land_run_horizontal_control()
             // apply SIMPLE mode transform to pilot inputs
             update_simple_mode();
 
-            // convert pilot input to lean angles
-            get_pilot_desired_lean_angles(target_roll, target_pitch, loiter_nav->get_angle_max_cd(), attitude_control->get_althold_lean_angle_max_cd());
+            // convert pilot input to reposition velocity
+            // use half maximum acceleration as the maximum velocity to ensure aircraft will
+            // stop from full reposition speed in less than 1 second.
+            const float max_pilot_vel = wp_nav->get_wp_acceleration() * 0.5;
+            vel_correction = get_pilot_desired_velocity(max_pilot_vel);
 
             // record if pilot has overridden roll or pitch
-            if (!is_zero(target_roll) || !is_zero(target_pitch)) {
+            if (!vel_correction.is_zero()) {
                 if (!copter.ap.land_repo_active) {
                     AP::logger().Write_Event(LogEvent::LAND_REPO_ACTIVE);
                 }
@@ -641,11 +679,11 @@ void Mode::land_run_horizontal_control()
     }
 
     // this variable will be updated if prec land target is in sight and pilot isn't trying to reposition the vehicle
-    bool doing_precision_landing = false;
+    copter.ap.prec_land_active = false;
 #if PRECISION_LANDING == ENABLED
-    doing_precision_landing = !copter.ap.land_repo_active && copter.precland.target_acquired();
+    copter.ap.prec_land_active = !copter.ap.land_repo_active && copter.precland.target_acquired();
     // run precision landing
-    if (doing_precision_landing) {
+    if (copter.ap.prec_land_active) {
         Vector2f target_pos, target_vel;
         if (!copter.precland.get_target_position_cm(target_pos)) {
             target_pos = inertial_nav.get_position_xy_cm();
@@ -657,29 +695,16 @@ void Mode::land_run_horizontal_control()
         Vector2p landing_pos = target_pos.topostype();
         // target vel will remain zero if landing target is stationary
         pos_control->input_pos_vel_accel_xy(landing_pos, target_vel, zero);
-        // run pos controller
-        pos_control->update_xy_controller();
     }
 #endif
 
-    if (!doing_precision_landing) {
-        if (copter.ap.prec_land_active) {
-            // precland isn't active anymore but was active a while back
-            // lets run an init again
-            // set target to stopping point
-            Vector2f stopping_point;
-            loiter_nav->get_stopping_point_xy(stopping_point);
-            loiter_nav->init_target(stopping_point);
-        }
-        // process roll, pitch inputs
-        loiter_nav->set_pilot_desired_acceleration(target_roll, target_pitch);
-
-        // run loiter controller
-        loiter_nav->update();
+    if (!copter.ap.prec_land_active) {
+        Vector2f accel;
+        pos_control->input_vel_accel_xy(vel_correction, accel);
     }
 
-    copter.ap.prec_land_active = doing_precision_landing;
-
+    // run pos controller
+    pos_control->update_xy_controller();
     Vector3f thrust_vector = pos_control->get_thrust_vector();
 
     if (g2.wp_navalt_min > 0) {
@@ -691,7 +716,7 @@ void Mode::land_run_horizontal_control()
         // interpolate for 1m above that
         const float attitude_limit_cd = linear_interpolate(700, copter.aparm.angle_max, get_alt_above_ground_cm(),
                                                      g2.wp_navalt_min*100U, (g2.wp_navalt_min+1)*100U);
-        const float thrust_vector_max = sinf(radians(attitude_limit_cd / 100.0f)) * GRAVITY_MSS * 100.0f;
+        const float thrust_vector_max = sinf(radians(attitude_limit_cd * 0.01f)) * GRAVITY_MSS * 100.0f;
         const float thrust_vector_mag = thrust_vector.xy().length();
         if (thrust_vector_mag > thrust_vector_max) {
             float ratio = thrust_vector_max / thrust_vector_mag;
